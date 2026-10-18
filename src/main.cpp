@@ -241,6 +241,12 @@ static void forward_output_report(uint8_t const *data, uint16_t len) {
         state.MicSelect = config.mic_select;
         state.NoiseCancelEnable = 1;
     }
+    // Linux hid-playstation sends AudioControl 0 / 0x30 on every headset
+    // plug/unplug; with NoiseCancelEnable cleared the speaker is attenuated
+    // (#263), so keep it set here too.
+    if (state.AllowAudioControl) {
+        state.NoiseCancelEnable = 1;
+    }
     if (config.lock_volume) {
         state.AllowHeadphoneVolume = 0;
         state.AllowMicVolume = 0;
