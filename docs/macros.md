@@ -20,9 +20,13 @@ Use the Macro Pico's BOOTSEL button while the firmware is running. Hold gestures
 
 The button is sampled every 100 ms and debounced. Keep the hold until its LED indication appears before releasing it. Short presses and 3-to-6-second recording requests during a save are ignored. A 6-second pairing request can run while the atomic save finishes. A regular short press with no saved macro shows the error pattern; it does not start pairing. Holding BOOTSEL while connecting USB still enters the Pico bootloader.
 
+With a valid saved macro, power-up enters standby: playback is stopped, USB is available, and the LED gives the brief idle pulse. The Pico does not search for a controller or accept its automatic reconnection. Hold BOOTSEL for at least 6 seconds and release to open a connection session. Short presses and the 3-second record-ready gesture do not open pairing.
+
+If that connection attempt fails, finds no controller, or the controller later disconnects, the saved-macro Pico returns to standby. Another 6-second hold is needed to connect again. Without a valid saved macro, power-up keeps the original automatic controller search for first use.
+
 ## Record and replay
 
-1. Connect the Macro Pico to the computer and pair a DualSense.
+1. Connect the Macro Pico to the computer and pair a DualSense. If a macro is already saved, hold BOOTSEL for at least 6 seconds and release to start pairing first.
 2. Hold BOOTSEL for at least 3 seconds but less than 6. Release it when the LED shows the slow record-ready blink.
 3. Short-press BOOTSEL to start capture. The current controller state at this press is the first recorded state.
 4. Perform the controller actions. Recording captures buttons, the D-pad, both sticks, and both triggers. It does not record motion sensors or touch coordinates.

@@ -24,6 +24,9 @@
 #include "wake.h"
 #include "usb.h"
 #include "macro/macro.h"
+#if ENABLE_GAMEPAD_MACRO
+#include "macro/bt_pairing.hpp"
+#endif
 #include "pico/util/queue.h"
 #include "pico/time.h"
 #include "pico/platform.h"
@@ -50,6 +53,9 @@ static bd_addr_t current_device_addr;
 static bool device_found = false;
 static bool new_pair = false; // 只有新匹配的设备才用创建channel，自动重连走的是service
 bool bt_inquiring = false;
+#if ENABLE_GAMEPAD_MACRO
+static dongle_macro::BluetoothPairing bt_pairing(bt_inquiring);
+#endif
 
 // LED triple-flash confirmation state for clear-all action
 static int bt_clear_flash_toggles_remaining = 0;
@@ -164,8 +170,17 @@ int bt_init() {
     gap_ssp_set_io_capability(SSP_IO_CAPABILITY_DISPLAY_YES_NO);
     gap_ssp_set_authentication_requirement(SSP_IO_AUTHREQ_MITM_PROTECTION_NOT_REQUIRED_GENERAL_BONDING);
 
+#if ENABLE_GAMEPAD_MACRO
+    bt_pairing.init(macro_keep_usb());
+    // BTstack calls this before its internal auto-accept, unlike our later
+    // CONNECTION_REQUEST event handler. Standby must reject at this point.
+    gap_register_classic_connection_filter([](bd_addr_t, hci_link_type_t) {
+        return bt_pairing.accepts_connection() ? 1 : 0;
+    });
+#else
     gap_connectable_control(1);
     gap_discoverable_control(1);
+#endif
 
     hci_event_callback_registration.callback = &hci_packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);
@@ -303,12 +318,18 @@ void bt_blacklist_persist_if_dirty() {
 // can still reconnect later.
 void bt_bootsel_click_action() {
     printf("[BT] BOOTSEL click - fresh inquiry\n");
+#if ENABLE_GAMEPAD_MACRO
+    // In macro mode only the six-second gesture calls this action. Track the
+    // ACL, including HID setup, so switching cannot race a pending connection.
+    if (bt_pairing.open(acl_handle != HCI_CON_HANDLE_INVALID)) bt_disconnect();
+#else
     if (hid_interrupt_cid != 0) {
         bt_disconnect();
     } else {
         gap_inquiry_start(30);
         bt_inquiring = true;
     }
+#endif
 }
 
 // BOOTSEL hold action: disconnect current controller and delete all link keys.
@@ -406,10 +427,14 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
             if (state == HCI_STATE_WORKING) {
                 gap_set_page_scan_activity(0x0012, 0x0012); // 11.25ms
                 gap_set_page_scan_type(PAGE_SCAN_MODE_INTERLACED);
-                printf("[BT] Stack ready, start inquiry\n");
                 bt_blacklist_load();
+#if ENABLE_GAMEPAD_MACRO
+                bt_pairing.stack_ready();
+#else
+                printf("[BT] Stack ready, start inquiry\n");
                 gap_inquiry_start(30);
                 bt_inquiring = true;
+#endif
             }
             break;
         }
@@ -420,6 +445,9 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
         // device whose name starts with "DualSense" is accepted; all other
         // devices found during the inquiry are ignored.
         case GAP_EVENT_INQUIRY_RESULT: {
+#if ENABLE_GAMEPAD_MACRO
+            if (!bt_pairing.accepts_result()) break;
+#endif
             if (device_found) break; // already latched a target, keep first match
 
             bd_addr_t addr;
@@ -453,7 +481,11 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
         case GAP_EVENT_INQUIRY_COMPLETE:
         case HCI_EVENT_INQUIRY_COMPLETE: {
             printf("[HCI] Inquiry complete.\n");
+#if ENABLE_GAMEPAD_MACRO
+            if (!bt_pairing.inquiry_complete(device_found, macro_keep_usb())) break;
+#else
             bt_inquiring = false;
+#endif
             if (device_found) {
                 printf("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
                 new_pair = true;
@@ -476,11 +508,20 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
                 device_found = false;
                 new_pair = false;
                 printf("[HCI] Create connection rejected\n");
+#if ENABLE_GAMEPAD_MACRO
+                bt_pairing.finish(macro_keep_usb());
+#endif
                 // gap_inquiry_start(30);
             }
             if (opcode == HCI_OPCODE_HCI_INQUIRY_CANCEL) {
                 bt_inquiring = false;
             }
+#if ENABLE_GAMEPAD_MACRO
+            if (opcode == HCI_OPCODE_HCI_INQUIRY && status != ERROR_CODE_SUCCESS) {
+                // BTstack returns to idle on rejection without a completion event.
+                bt_pairing.inquiry_complete(false, macro_keep_usb());
+            }
+#endif
             break;
         }
 
@@ -504,6 +545,15 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
                 const hci_con_handle_t handle = hci_event_connection_complete_get_connection_handle(packet);
                 bd_addr_t conn_addr;
                 hci_event_connection_complete_get_bd_addr(packet, conn_addr);
+
+#if ENABLE_GAMEPAD_MACRO
+                // BTstack may auto-accept before our request rejection runs.
+                // Standby must also reject that completed ACL before auth/HID.
+                if (!bt_pairing.accepts_connection()) {
+                    hci_send_cmd(&hci_disconnect, handle, 0x0F);
+                    break;
+                }
+#endif
 
                 // BTstack auto-accepts incoming connections internally, so our
                 // CONNECTION_REQUEST-time reject is racing with hci_run() and
@@ -532,6 +582,9 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
                 device_found = false;
                 new_pair = false;
                 printf("[HCI] ACL connect failed status=0x%02X\n", status);
+#if ENABLE_GAMEPAD_MACRO
+                bt_pairing.finish(macro_keep_usb());
+#endif
                 // gap_inquiry_start(30);
             }
             break;
@@ -578,6 +631,9 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
         case HCI_EVENT_AUTHENTICATION_COMPLETE: {
             const uint8_t status = hci_event_authentication_complete_get_status(packet);
             const hci_con_handle_t handle = hci_event_authentication_complete_get_connection_handle(packet);
+#if ENABLE_GAMEPAD_MACRO
+            if (!bt_pairing.accepts_security_event(handle, acl_handle)) break;
+#endif
             printf("[HCI] Authentication complete handle=0x%04X status=0x%02X\n", handle, status);
             if (status != ERROR_CODE_SUCCESS) {
                 // Only a rejected or missing key means the pairing is gone. Other
@@ -590,7 +646,12 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
                     printf("[HCI] Authentication failed (status 0x%02X), key kept\n", status);
                 }
                 bt_disconnect();
+#if ENABLE_GAMEPAD_MACRO
+                bt_pairing.finish(macro_keep_usb());
+                if (!macro_keep_usb()) gap_inquiry_start(30);
+#else
                 gap_inquiry_start(30);
+#endif
             } else {
                 hci_send_cmd(&hci_set_connection_encryption, handle, 1);
             }
@@ -600,6 +661,9 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
         case HCI_EVENT_ENCRYPTION_CHANGE: {
             const uint8_t status = hci_event_encryption_change_get_status(packet);
             const hci_con_handle_t handle = hci_event_encryption_change_get_connection_handle(packet);
+#if ENABLE_GAMEPAD_MACRO
+            if (!bt_pairing.accepts_security_event(handle, acl_handle)) break;
+#endif
             const uint8_t enabled = hci_event_encryption_change_get_encryption_enabled(packet);
             printf("[HCI] Encryption change handle=0x%04X status=0x%02X enabled=%u\n", handle, status, enabled);
             if (status == ERROR_CODE_SUCCESS && enabled) {
@@ -620,6 +684,12 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
             const uint32_t cod = hci_event_connection_request_get_class_of_device(packet);
             // 这个是按 PS 键重连的时候才会触发
             printf("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
+#if ENABLE_GAMEPAD_MACRO
+            if (!bt_pairing.accepts_connection()) {
+                hci_send_cmd(&hci_reject_connection_request, addr, 0x0F);
+                break;
+            }
+#endif
             if (bt_blacklist_contains(addr)) {
                 printf("[HCI] Rejecting connection from %s (MAC is on persistent blacklist; re-pair via PS+Share)\n",
                        bd_addr_to_str(addr));
@@ -627,6 +697,9 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
                 break;
             }
             if ((cod & 0x000F00) == 0x000500) {
+#if ENABLE_GAMEPAD_MACRO
+                bt_pairing.incoming();
+#endif
                 bd_addr_copy(current_device_addr, addr);
                 // 这里的 stop 触发条件是：刚开机时，pico 处于 inquiry 模式，然后 DS5 通过 PS 键重连
                 // 如果在连接上以后没有停止 inquiry，会导致回报率很低
@@ -637,6 +710,10 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
         }
 
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
+#if ENABLE_GAMEPAD_MACRO
+            // A rejected auto-accepted ACL never became the active controller.
+            if (hci_event_disconnection_complete_get_connection_handle(packet) != acl_handle) break;
+#endif
             macro_bt_disconnect();
 #if !ENABLE_SERIAL
             // Hide the USB device when no controller is paired (upstream behavior), EXCEPT when
@@ -647,8 +724,10 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
                 tud_disconnect();
             }
 #endif
+#if !ENABLE_GAMEPAD_MACRO
             gap_connectable_control(1);
             gap_discoverable_control(1);
+#endif
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
             device_found = false;
             new_pair = false;
@@ -656,6 +735,9 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
             bt_rssi = 0;
             hid_control_cid = 0;
             hid_interrupt_cid = 0;
+#if ENABLE_GAMEPAD_MACRO
+            bt_pairing.disconnected(macro_keep_usb());
+#endif
             gpio_on_disconnect();
             wake_on_bt_disconnect();
 #if !ENABLE_SERIAL
@@ -691,6 +773,20 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
 static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint16_t channel, uint8_t *packet,
                                                       uint16_t size) {
     (void) channel;
+
+#if ENABLE_GAMEPAD_MACRO
+    // Do not expose HID if an incoming ACL raced the standby rejection.
+    if (!bt_pairing.allowed()) {
+        if (packet_type == HCI_EVENT_PACKET) {
+            const uint8_t event = hci_event_packet_get_type(packet);
+            if (event == L2CAP_EVENT_INCOMING_CONNECTION)
+                l2cap_decline_connection(l2cap_event_incoming_connection_get_local_cid(packet));
+            else if (event == L2CAP_EVENT_CHANNEL_OPENED && l2cap_event_channel_opened_get_status(packet) == 0)
+                l2cap_disconnect(l2cap_event_channel_opened_get_local_cid(packet));
+        }
+        return;
+    }
+#endif
 
     if (packet_type == L2CAP_DATA_PACKET) {
         if (channel == hid_interrupt_cid) {

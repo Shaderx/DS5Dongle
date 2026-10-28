@@ -40,7 +40,6 @@ uint32_t generation = 0;
 bool program_ready = false;
 bool start_pending = false;
 bool rebind_pending = false;
-bool pair_pending = false;
 uint32_t held_ms = 0;
 uint32_t last_led_ms = 0;
 bool led_state = false;
@@ -226,7 +225,6 @@ void pair_controller() {
     engine.stop();
     start_pending = false;
     if (mode != Mode::Save) mode = Mode::Idle;
-    pair_pending = bt_is_connected();
     bt_bootsel_click_action();
 }
 void short_press() {
@@ -287,10 +285,6 @@ void macro_task() {
     save_tick();
     if (rebind_pending && !usb_reconfiguring && tud_mounted() && !tud_suspended())
         rebind_pending = false;
-    if (pair_pending && !bt_is_connected()) {
-        pair_pending = false;
-        bt_bootsel_click_action();
-    }
     if (mode == Mode::Record) {
         recorder.observe(live_controls, time_us_64());
         if (recorder.full()) mode = Mode::Full;

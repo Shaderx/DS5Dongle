@@ -47,6 +47,11 @@ You have two options:
 
 ### Pairing the Controller
 
+On the Macro Pico with a valid saved macro, hold BOOTSEL for at least 6 seconds
+and release before these steps. It boots into standby with USB available and
+playback stopped. It does not search for or automatically reconnect a controller.
+Without a saved macro, the initial controller search starts automatically.
+
 1. Put the DualSense controller into Bluetooth pairing mode
 2. Wait for the Pico2W to detect and connect
 3. Once connected, the device will appear on the host system
@@ -61,6 +66,9 @@ recording. A second short press stops and saves; playback stays stopped until th
 next short press. Hold for at least 6 seconds and release to pair or switch the
 controller. See the [macro controls guide](docs/macros.md) for LED patterns and
 recording details.
+A saved-macro Pico returns to standby after a failed pairing attempt or controller
+disconnect. Hold for at least 6 seconds again to connect. Short presses and the
+3-second record-ready gesture do not start pairing.
 Holding BOOTSEL while connecting USB still enters the Pico bootloader.
 
 ## Configuration
@@ -104,7 +112,8 @@ You can modify the Pico settings via the web config.
 
 ## Notes
 
-The Pico device will only be visible to the system after the controller is connected
+Without a saved macro, the Pico device is visible to the system after the controller
+connects. A Macro Pico with a valid saved macro also provides USB in standby.
 
 Some behaviors depend on reconnection cycles to take effect
 

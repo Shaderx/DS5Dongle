@@ -19,7 +19,7 @@ void boot(bool erase) {
     program = {}; engine = {}; recorder = {}; gesture = {};
     snapshot = {}; live_snapshot = {}; live_controls = {};
     mode = Mode::Idle; active_slot = -1; generation = 0;
-    program_ready = start_pending = rebind_pending = pair_pending = false;
+    program_ready = start_pending = rebind_pending = false;
     held_ms = last_led_ms = 0; led_state = led_output = false;
     save_phase = SavePhase::None; save_position = 0;
     clock_us = 1'000'000; connected = true; mounted = true;
@@ -197,6 +197,27 @@ void test_saved_boot_and_usb_backpressure() {
     macro_usb_stop(); submit(); macro_task();
     assert(!engine.status().running && !start_pending);
 }
+void test_saved_boot_gestures_leave_pairing_to_six_second_hold() {
+    boot(true); save_initial(); boot(false);
+    connected = false;
+    bt_inquiring = false;
+    assert(macro_keep_usb() && !engine.status().running && !start_pending);
+    last_led_ms = 0; led_state = led_output = false;
+    led_tick(20); assert(led_output);
+    led_tick(80); assert(!led_output); // Idle pulse, not inquiry flashes.
+    submit();
+    press(100); macro_task();
+    assert(engine.status().running && pair_calls == 0);
+    press(100);
+    press(3000);
+    assert(mode == Mode::RecordReady && pair_calls == 0);
+    press(100);
+    assert(mode == Mode::Error && pair_calls == 0);
+    press(6000);
+    assert(mode == Mode::Idle && pair_calls == 1);
+    macro_task();
+    assert(pair_calls == 1); // No deferred runtime retry after disconnect.
+}
 void test_replacement_identity_stays_pinned_until_commit() {
     boot(true); save_initial();
     controller(2, false); record(2);
@@ -364,6 +385,7 @@ int main() {
     test_short_press_without_saved_macro_does_not_start_pairing();
     test_record_ready_led_differs_from_recording_led();
     test_saved_boot_and_usb_backpressure();
+    test_saved_boot_gestures_leave_pairing_to_six_second_hold();
     test_replacement_identity_stays_pinned_until_commit();
     test_every_flash_operation_failure_retains_previous();
     test_cancel_restore_remap_and_stale_features();
