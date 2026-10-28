@@ -1,0 +1,23 @@
+name: Macro core tests
+
+on:
+  push:
+    branches: [macro]
+  pull_request:
+    branches: [macro]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure native tests
+        run: cmake -S tests/macro -B build/macro-tests -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build/macro-tests --parallel
+      - name: Test
+        run: ctest --test-dir build/macro-tests --output-on-failure

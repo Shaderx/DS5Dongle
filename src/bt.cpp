@@ -23,6 +23,7 @@
 #include "fake_ds5.h"
 #include "wake.h"
 #include "usb.h"
+#include "macro/macro.h"
 #include "pico/util/queue.h"
 #include "pico/time.h"
 #include "pico/platform.h"
@@ -351,6 +352,9 @@ void bt_bootsel_hold_action() {
 }
 
 void bt_inquiring_led() {
+#if ENABLE_GAMEPAD_MACRO
+    return;
+#endif
     // BOOTSEL clear-confirmation triple-flash takes priority over inquiry blink
     if (bt_clear_flash_toggles_remaining > 0) {
         uint32_t now = to_ms_since_boot(get_absolute_time());
@@ -633,12 +637,13 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
         }
 
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
+            macro_bt_disconnect();
 #if !ENABLE_SERIAL
             // Hide the USB device when no controller is paired (upstream behavior), EXCEPT when
             // wake is on (stay on the bus so a returning controller can signal a host wake) or
             // while the host is suspended -- hiding then re-showing re-enumerates, and a USB
             // re-connect wakes a sleeping host. Defer the hide until the host is awake.
-            if (!get_config().enable_wake && !tud_suspended()) {
+            if (!macro_keep_usb() && !get_config().enable_wake && !tud_suspended()) {
                 tud_disconnect();
             }
 #endif
@@ -654,13 +659,15 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
             gpio_on_disconnect();
             wake_on_bt_disconnect();
 #if !ENABLE_SERIAL
-            if (get_config().enable_wake && !tud_suspended()) {
+            if (!macro_keep_usb() && get_config().enable_wake && !tud_suspended()) {
                 usb_reconnect(true);
             }
 #endif
             while (queue_try_remove(&send_fifo, NULL)) {
             }
+#if !ENABLE_GAMEPAD_MACRO
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+#endif
 #if ENABLE_BATT_LED
             battery_led_on_disconnect();
 #endif
@@ -711,7 +718,7 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                 bt_disconnect();
             }
         } else if (channel == hid_control_cid) {
-            if (packet[0] == 0xA3) {
+            if (size >= 2 && packet[0] == 0xA3) {
                 const uint8_t report_id = packet[1];
                 feature_data[report_id].assign(packet + 2, packet + size);
                 feature_rx_epoch[report_id]++;
@@ -720,7 +727,7 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                 printf("[L2CAP] HID Control data len=%u\n", size);
                 printf_hexdump(packet, size);
 #endif
-                if (report_id == 0x20) {
+                if (report_id == 0x20 && size >= 24) {
                     if (packet[23] == 0x44) {
                         printf("Connected DSE Controller\n");
                         is_dse = true;
@@ -733,9 +740,11 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                         is_dse = false;
                     }
 #if !ENABLE_SERIAL
-                    usb_reconnect(false);
+                    if (!macro_keep_usb()) usb_reconnect(false);
 #endif
                 }
+                const auto& cached = feature_data[report_id];
+                macro_feature(report_id, cached.data(), cached.size());
             }
 
             bt_data_callback(CONTROL, packet, size);
@@ -774,9 +783,11 @@ static void __not_in_flash_func(l2cap_packet_handler)(uint8_t packet_type, uint1
                     // blacklist (treated as user-explicit re-pair in PS+Share mode).
                     bt_blacklist_remove(current_device_addr);
 
+#if !ENABLE_GAMEPAD_MACRO
                     if (!get_config().disable_pico_led) {
                         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
                     }
+#endif
                     inactive_time = get_absolute_time();
 
                     printf("Init DualSense\n");
@@ -1007,6 +1018,7 @@ void set_feature_data(uint8_t reportId, uint8_t *data, uint16_t len) {
 }
 
 void init_feature() {
+    macro_controller_init();
     feature_data.clear();
     get_feature_data(0x09, 20);
     get_feature_data(0x20, 64);

@@ -28,12 +28,14 @@
 #include "config.h"
 #include "usb_descriptors.h"
 #include "usb.h"
+#include "macro/macro.h"
 
 #ifndef ENABLE_SERIAL
 #define ENABLE_SERIAL 0
 #endif
 
 bool ds_mode() {
+    if (macro_keep_usb()) return macro_persona(true);
     if (get_config().controller_mode == 2) {
         return !is_dse;
     }

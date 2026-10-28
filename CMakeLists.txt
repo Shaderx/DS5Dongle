@@ -53,6 +53,7 @@ message(STATUS "DS5Dongle build target -- PICO_BOARD_HEADER_DIRS=${PICO_BOARD_HE
 #set(PICO_CYW43_ARCH_THREADSAFE_BACKGROUND 1)
 
 option(ENABLE_SERIAL "Enable USB CDC serial printf output" OFF)
+option(ENABLE_GAMEPAD_MACRO "Enable BOOTSEL gamepad recording and persistent playback" ON)
 if (ENABLE_SERIAL)
         set(ENABLE_SERIAL_VALUE 1)
 else ()
@@ -71,7 +72,7 @@ else()
     set(ENABLE_DEBUG_VALUE 0)
 endif ()
 option(ENABLE_BATT_LED "Blink Pico LED when DualSense battery is low (<=10%)" ON)
-if (ENABLE_BATT_LED)
+if (ENABLE_BATT_LED AND NOT ENABLE_GAMEPAD_MACRO)
         set(ENABLE_BATT_LED_VALUE 1)
 else ()
         set(ENABLE_BATT_LED_VALUE 0)
@@ -131,7 +132,19 @@ if (ENABLE_DEBUG)
         target_sources(ds5-bridge PRIVATE src/debug.cpp)
 endif ()
 
-if (ENABLE_BATT_LED)
+if (ENABLE_GAMEPAD_MACRO)
+        target_sources(ds5-bridge PRIVATE
+                src/macro/macro.cpp
+                src/macro/macro_engine.cpp
+                src/macro/macro_recorder.cpp
+        )
+        target_compile_definitions(ds5-bridge PRIVATE ENABLE_GAMEPAD_MACRO=1)
+        target_link_options(ds5-bridge PRIVATE "LINKER:-T,${CMAKE_CURRENT_SOURCE_DIR}/src/macro/storage_assert.ld")
+else ()
+        target_compile_definitions(ds5-bridge PRIVATE ENABLE_GAMEPAD_MACRO=0)
+endif ()
+
+if (ENABLE_BATT_LED AND NOT ENABLE_GAMEPAD_MACRO)
         target_sources(ds5-bridge PRIVATE src/battery_led.cpp)
 endif ()
 

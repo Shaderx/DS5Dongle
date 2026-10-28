@@ -10,7 +10,7 @@
 extern bool usb_keyboard_only;
 extern bool usb_reconfiguring;
 uint8_t usb_keyboard_instance();
-void usb_reconnect(bool keyboard_only);
+void usb_reconnect(bool keyboard_only, bool force = false);
 
 extern uint8_t mute[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
 extern float volume[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)

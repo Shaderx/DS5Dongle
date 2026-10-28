@@ -27,6 +27,7 @@
 #include "config.h"
 #include "cmd.h"
 #include "status_gpio.h"
+#include "macro/macro.h"
 #if ENABLE_BATT_LED
 #include "battery_led.h"
 #endif
@@ -41,6 +42,20 @@ bool report_dirty = false;
 
 void __not_in_flash_func(interrupt_loop)() {
     if (usb_keyboard_only || usb_reconfiguring || !tud_hid_ready()) return;
+
+#if ENABLE_GAMEPAD_MACRO
+    USBGetStateData report = interrupt_in_data;
+    button_remap_apply(report);
+    const bool overridden = macro_override(report);
+    if (!overridden && get_config().polling_rate_mode == 3 && !report_dirty) return;
+    if (tud_hid_report(0x01, &report, sizeof(report))) {
+        report_dirty = false;
+        if (overridden) macro_submitted();
+    } else {
+        report_dirty = true;
+    }
+    return;
+#else
 
     // TODO: Refactor for better code reuse
     if (get_config().polling_rate_mode != 3) {
@@ -72,6 +87,7 @@ void __not_in_flash_func(interrupt_loop)() {
             report_dirty = true;
         }
     }
+#endif
 }
 
 void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
@@ -130,6 +146,7 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
         // modes silently breaks wake while the host is suspended.
         wake_on_bt_input(data + 3, len - 3);
         memcpy(&interrupt_in_data, data + 3, sizeof(interrupt_in_data));
+        macro_live_input(interrupt_in_data);
         if (!usb_keyboard_only && !usb_reconfiguring) {
             button_shortcut_tick(interrupt_in_data);
         }
@@ -171,6 +188,10 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
     if (is_pico_cmd(report_id)) {
         return pico_cmd_get(report_id, buffer, reqlen);
     }
+
+    const uint16_t frozen = macro_get_feature(report_id, buffer, reqlen);
+    if (frozen) return frozen;
+    if (macro_keep_usb()) return 0;
 
     // Reports that must mirror the controller's live state: the DSE profile
     // slots (0x70-0x7B) and the test-command result (0x81). Hold the USB
@@ -328,8 +349,9 @@ int main() {
 
     board_init();
     config_load();
+    macro_init();
 #if !ENABLE_SERIAL
-    usb_keyboard_only = get_config().enable_wake;
+    usb_keyboard_only = get_config().enable_wake && !macro_keep_usb();
 #endif
     tusb_rhport_init_t dev_init = {
         .role = TUSB_ROLE_DEVICE,
@@ -337,7 +359,7 @@ int main() {
     };
     tusb_init(BOARD_TUD_RHPORT, &dev_init);
 #if !ENABLE_SERIAL
-    if (!usb_keyboard_only) {
+    if (!usb_keyboard_only && !macro_keep_usb()) {
         sleep_ms(150);
         tud_disconnect();
     }
@@ -361,7 +383,9 @@ int main() {
             tight_loop_contents();
         }
     }
+#if !ENABLE_GAMEPAD_MACRO
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+#endif
 
 #ifdef CYW43_WL_GPIO_SMPS_PIN
     cyw43_arch_gpio_put(CYW43_WL_GPIO_SMPS_PIN, true);
@@ -371,7 +395,7 @@ int main() {
     battery_led_init();
 #endif
 
-#if !ENABLE_SERIAL
+#if !ENABLE_SERIAL && !ENABLE_GAMEPAD_MACRO
     if (watchdog_caused_reboot()) {
         printf("Rebooted by Watchdog!\n");
         // 当崩溃重启以后，闪三下灯
@@ -414,10 +438,13 @@ int main() {
         debug_log_core1_stack_usage();
 #endif
         interrupt_loop();
+        macro_task();
 #if ENABLE_BATT_LED
         battery_led_tick();
 #endif
         button_check();
+#if !ENABLE_GAMEPAD_MACRO
         bt_inquiring_led();
+#endif
     }
 }

@@ -15,6 +15,8 @@ jobs:
     uses: ./.github/workflows/build-firmware.yml
     with:
       version: ${{ github.sha }}   # reusable build shortens a full SHA to 7
-      picow: true
-      waveshare: true
-      no_batt_led_check: true
+      # The macro branch targets the second Pico 2 W. Keep the other-board
+      # release matrix on the clean upstream master branch.
+      picow: false
+      waveshare: false
+      no_batt_led_check: false

@@ -1,11 +1,12 @@
 # Pico2W DualSense 5 Bridge
 
+This is the `macro` branch for a second Pico 2 W. It records a paired DualSense and replays one saved gamepad macro without the controller. It retains the original DualSense USB presentation. See the [macro controls and build guide](docs/macros.md) and [memory budget](docs/macro-memory.md). The fork's `master` branch remains aligned with the original upstream.
+
 [中文](./README.CN.md)
 
 > Turn a Raspberry Pi Pico2W (or other compatible board) into a wireless adapter for the DualSense (DS5) controller.
 
-***This repository only implements the core functionality of DS5Dongle — making a wireless controller appear as a wired
-connection. For additional features, please refer to [Community Fork](#Community-Fork)***
+The upstream project makes a wireless controller appear as a wired connection. This branch adds gamepad macro recording and playback. For other variants, see [Community Fork](#Community-Fork).
 
 ## Overview
 

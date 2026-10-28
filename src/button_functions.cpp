@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "bt.h"
+#include "macro/macro.h"
 #include "pico/time.h"
 #include "pico/flash.h"
 #include "hardware/gpio.h"
@@ -19,6 +20,7 @@
 #endif
 
 // Gesture thresholds, in samples at the 100 ms (10 Hz) poll cadence.
+#if !ENABLE_GAMEPAD_MACRO
 static constexpr int HOLD_SAMPLES = 15;         // ~1.5 s held -> clear all pairings
 static constexpr int CLICK_WINDOW_SAMPLES = 5;  // ~500 ms allowed between clicks
 
@@ -27,6 +29,7 @@ static int button_fsm = 0;
 static int button_press_samples = 0;
 static int button_wait_samples = 0;
 static int button_click_count = 0;
+#endif
 static uint32_t button_last_check_ms = 0;
 
 // Read BOOTSEL by briefly floating the QSPI CSn line. Must run with both cores
@@ -55,17 +58,17 @@ static void __no_inline_not_in_flash_func(button_read_cb)(void *param) {
                     IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
 }
 
-static bool button_read_bootsel() {
-    bool pressed = false;
+static bool button_read_bootsel(bool& pressed) {
+    pressed = false;
     // 100 ms timeout for the safe-state coordination; the poll is gated on the
     // 10 Hz cadence and the safe-execute parks core1, so this never runs during
     // active audio reads anyway.
     int rc = flash_safe_execute(button_read_cb, &pressed, 100);
-    if (rc != PICO_OK) return false;
-    return pressed;
+    return rc == PICO_OK;
 }
 
 // Act on a completed click sequence once the inter-click window closes.
+#if !ENABLE_GAMEPAD_MACRO
 static void button_dispatch(int clicks) {
     if (clicks <= 1) {
         bt_bootsel_click_action(); // single click -> pair / switch controller
@@ -83,6 +86,7 @@ static void button_dispatch(int clicks) {
         reset_usb_boot(0, 0); // noreturn
     }
 }
+#endif
 
 // Poll BOOTSEL at 10 Hz and dispatch single / double / triple click + hold:
 //   - hold (>= HOLD_SAMPLES, ~1.5 s) -> clear all pairings
@@ -99,7 +103,20 @@ void button_check() {
 
     bt_blacklist_persist_if_dirty();
 
-    bool pressed = button_read_bootsel();
+    bool pressed = false;
+    const bool valid = button_read_bootsel(pressed);
+#if ENABLE_GAMEPAD_MACRO
+    // Two equal valid samples debounce BOOTSEL. A failed sample cannot release it.
+    static bool candidate = false;
+    static unsigned same_samples = 0;
+    if (valid) {
+        if (pressed != candidate) { candidate = pressed; same_samples = 1; }
+        else if (same_samples < 2) ++same_samples;
+    }
+    macro_button_sample(valid && same_samples >= 2, candidate, now);
+    return;
+#else
+    if (!valid) return;
 
     switch (button_fsm) {
         case 0: // IDLE - wait for the first press
@@ -142,4 +159,5 @@ void button_check() {
             }
             break;
     }
+#endif
 }

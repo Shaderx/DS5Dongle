@@ -4,6 +4,7 @@
 
 #include "wake.h"
 #include "usb.h"
+#include "macro/macro.h"
 
 #ifdef ENABLE_WAKE_HID
 
@@ -126,6 +127,8 @@ void wake_note_usb_reconnect(void) {
 }
 
 extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
+    macro_usb_stop();
+    if (macro_keep_usb()) return;
     WAKE_DBG("tud_suspend_cb remote_wakeup_en=%d prev_state=%s",
              (int)remote_wakeup_en, wake_state_name(state));
     // A deliberate Reconnect USB (FUNC_RECONNECT) tears the bus down and back up, which looks
@@ -175,7 +178,7 @@ extern "C" void tud_resume_cb(void) {
     suspend_at_us = 0;   // resumed before the debounce elapsed -> cancel the disconnect
 
 #if !ENABLE_SERIAL
-    if (!bt_is_connected()) {
+    if (!bt_is_connected() && !macro_keep_usb()) {
         if (!get_config().enable_wake) {
             tud_disconnect();
         } else if (!usb_keyboard_only) {
@@ -197,7 +200,7 @@ extern "C" void tud_mount_cb(void) {
     // Remove the ghost controller on resume/re-enumeration; retain only the wake keyboard when enabled.
     // If USB keep-charging is enabled, the PC may show a ghost device after startup/resume.
 #if !ENABLE_SERIAL
-    if (!bt_is_connected()) {
+    if (!bt_is_connected() && !macro_keep_usb()) {
         if (!get_config().enable_wake) {
             tud_disconnect();
         } else if (!usb_keyboard_only) {

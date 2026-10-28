@@ -268,11 +268,13 @@ void set_config(const uint8_t *new_config, const uint16_t len) {
         gpio_on_disconnect();
     }
 
+#if !ENABLE_GAMEPAD_MACRO
     if (config.body.disable_pico_led) {
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
     }else {
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
     }
+#endif
     SetStateData state{};
     if (config.body.trigger_reduce > 0) {
         state.AllowMotorPowerLevel = 1;

@@ -13,6 +13,7 @@
 #include "wake.h"
 #include "audio.h"
 #include "pico/time.h"
+#include "macro/macro.h"
 
 // USB descriptor mode: true exposes only the wake keyboard; false exposes the full device.
 bool usb_keyboard_only = false;
@@ -21,7 +22,15 @@ bool usb_reconfiguring = false;
 
 uint8_t usb_keyboard_instance() { return usb_keyboard_only ? 0 : 1; }
 
-void usb_reconnect(bool keyboard_only) {
+void usb_reconnect(bool keyboard_only, bool force) {
+#if ENABLE_GAMEPAD_MACRO
+    if (macro_keep_usb()) {
+        if (!force && !usb_reconfiguring && !usb_keyboard_only) return;
+        keyboard_only = false;
+    }
+#else
+    (void) force;
+#endif
     wake_note_usb_reconnect();
     tud_disconnect();
     usb_keyboard_only = keyboard_only;
@@ -240,6 +249,10 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
 #ifndef ENABLE_WAKE_HID
 
 void tud_suspend_cb(bool remote_wakeup_en) {
+#if ENABLE_GAMEPAD_MACRO
+    macro_usb_stop();
+    return;
+#endif
     printf("[USB PM] invoke tud_suspend_cb\n");
     if (!get_config().enable_wake) return;   // wake off: leave the controller's BT alone on a USB suspend (see wake.cpp)
     bt_disconnect();
