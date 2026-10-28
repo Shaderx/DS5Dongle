@@ -10,7 +10,7 @@ alignas(4) std::uint8_t test_flash[4 * 1024 * 1024];
 bool is_dse = false, usb_reconfiguring = false, bt_inquiring = false;
 namespace {
 std::uint64_t clock_us;
-bool connected, mounted, suspended, remap;
+bool connected, mounted, suspended, remap, led_output;
 int flash_operations, fail_operation, corrupt_operation, reconnects, pair_calls;
 TestConfig config;
 
@@ -20,7 +20,7 @@ void boot(bool erase) {
     snapshot = {}; live_snapshot = {}; live_controls = {};
     mode = Mode::Idle; active_slot = -1; generation = 0;
     program_ready = start_pending = rebind_pending = pair_pending = false;
-    held_ms = last_led_ms = 0; led_state = false;
+    held_ms = last_led_ms = 0; led_state = led_output = false;
     save_phase = SavePhase::None; save_position = 0;
     clock_us = 1'000'000; connected = true; mounted = true;
     suspended = remap = usb_reconfiguring = is_dse = false;
@@ -63,16 +63,120 @@ void finish_save() {
 }
 void record(std::uint8_t buttons) {
     press(3000);
+    assert(mode == Mode::RecordReady && !recorder.recording());
+    press(100);
     assert(mode == Mode::Record);
     clock_us += 10'000;
     macro_live_input(input(buttons));
     clock_us += 20'000;
     press(100);
-    assert(mode == Mode::Save);
+    assert(mode == Mode::Save && !start_pending);
 }
 void save_initial() {
     controller(); record(1); finish_save();
     assert(active_slot == 0 && program_ready && macro_keep_usb());
+    assert(mode == Mode::Idle && !start_pending && !engine.status().running);
+}
+void test_ready_is_not_capture_and_clicks_save_then_toggle_playback() {
+    boot(true); controller();
+    press(3000);
+    assert(mode == Mode::RecordReady && !recorder.recording());
+    assert(program.step_count == 0 && !start_pending);
+
+    // Input and elapsed time during the armed interval must not enter the macro.
+    clock_us += 1'500'000;
+    macro_live_input(input(2));
+    clock_us += 500'000;
+    macro_task();
+    assert(mode == Mode::RecordReady && !recorder.recording());
+    press(100);
+    assert(mode == Mode::Record && recorder.recording());
+
+    clock_us += 25'000;
+    macro_live_input(input(4));
+    clock_us += 25'000;
+    press(100);
+    assert(mode == Mode::Save && !start_pending);
+    finish_save();
+    assert(mode == Mode::Idle && !start_pending && !engine.status().running);
+    assert(program.step_count == 2);
+    assert(program.steps[0].state.buttons == 2 && program.steps[0].duration_ms == 25);
+    assert(program.steps[1].state.buttons == 4);
+
+    // The next ordinary clicks start and stop the committed loop.
+    submit();
+    press(100); macro_task();
+    assert(engine.status().running && !start_pending);
+    press(100);
+    assert(!engine.status().running && !start_pending);
+    submit();
+}
+void test_rearm_cancels_unsaved_capture_and_armed_bt_loss_is_safe() {
+    boot(true); save_initial();
+    const auto saved_steps = program.step_count;
+    controller(2);
+    press(3000);
+    assert(mode == Mode::RecordReady && !recorder.recording());
+    press(100);
+    assert(mode == Mode::Record && recorder.recording());
+    clock_us += 10'000;
+    macro_live_input(input(3));
+
+    press(3000); // Cancel the unsaved recording and return to record-ready.
+    assert(mode == Mode::RecordReady && !recorder.recording());
+    assert(active_slot == 0 && program_ready && program.step_count == saved_steps);
+    assert(snapshot.features[0].data[0] == 1);
+
+    connected = false;
+    macro_bt_disconnect();
+    assert(mode == Mode::RecordReady && !recorder.recording());
+    press(100);
+    assert(mode == Mode::Error && !recorder.recording() && pair_calls == 0);
+    assert(active_slot == 0 && program_ready);
+
+    connected = true; controller(3);
+    press(3000); press(100);
+    assert(mode == Mode::Record && recorder.recording());
+    press(6000); // Pairing cancels the unsaved recording and restores the save.
+    assert(pair_calls == 1 && mode == Mode::Idle && !start_pending);
+    assert(!recorder.recording() && active_slot == 0 && program_ready);
+    assert(program.step_count == saved_steps && snapshot.features[0].data[0] == 1);
+}
+void test_runtime_pairing_boundary_is_5999_record_and_6000_pair() {
+    boot(true); save_initial(); controller(2);
+    press(5'999);
+    assert(mode == Mode::RecordReady && pair_calls == 0 && !recorder.recording());
+    press(6'000);
+    assert(mode == Mode::Idle && pair_calls == 1 && active_slot == 0 && program_ready);
+
+    press(5'999);
+    assert(mode == Mode::RecordReady && pair_calls == 1 && !recorder.recording());
+    press(100);
+    assert(mode == Mode::Record && recorder.recording());
+    press(6'000);
+    assert(mode == Mode::Idle && pair_calls == 2 && !recorder.recording());
+    assert(active_slot == 0 && program_ready && !start_pending);
+}
+void test_short_press_without_saved_macro_does_not_start_pairing() {
+    boot(true); connected = false;
+    press(100);
+    assert(mode == Mode::Error && pair_calls == 0 && !start_pending);
+}
+void test_record_ready_led_differs_from_recording_led() {
+    boot(true); controller(); press(3000);
+    assert(mode == Mode::RecordReady);
+    last_led_ms = 0; led_state = led_output = false;
+    led_tick(20); assert(led_output);
+    led_tick(499); assert(led_output);
+    led_tick(500); assert(!led_output);
+    led_tick(1000); assert(led_output);
+
+    press(100);
+    assert(mode == Mode::Record);
+    last_led_ms = 0; led_state = led_output = false;
+    led_tick(20); assert(led_output);
+    led_tick(150); assert(!led_output);
+    led_tick(300); assert(led_output);
 }
 void test_saved_boot_and_usb_backpressure() {
     boot(true); save_initial(); boot(false);
@@ -106,7 +210,7 @@ void test_replacement_identity_stays_pinned_until_commit() {
     macro_task(); assert(!engine.status().running);
     usb_reconfiguring = false; mounted = true;
     submit(); macro_task();
-    assert(engine.status().running && !rebind_pending);
+    assert(!engine.status().running && !start_pending && !rebind_pending);
 }
 void test_every_flash_operation_failure_retains_previous() {
     boot(true); save_initial();
@@ -145,7 +249,8 @@ void test_every_flash_operation_failure_retains_previous() {
 }
 void test_cancel_restore_remap_and_stale_features() {
     boot(true); save_initial();
-    controller(2); remap = true; press(3000);
+    controller(2); remap = true; press(3000); assert(mode == Mode::RecordReady);
+    press(100);
     assert(mode == Mode::Record && live_controls.buttons == 0);
     clock_us += 10'000; macro_live_input(input(1));
     assert(live_controls.buttons == 2);
@@ -157,16 +262,17 @@ void test_cancel_restore_remap_and_stale_features() {
     assert(live_snapshot.features[0].size == 0);
     connected = true; controller();
     assert(reinterpret_cast<const USBGetStateData*>(live_snapshot.input)->AngularVelocityX == 0);
-    press(10'000);
+    press(6'000);
     assert(pair_calls == 1 && mode == Mode::Idle && !start_pending);
 }
 void test_usb_stop_during_save_or_rebind_cancels_start() {
     boot(true); save_initial(); controller(2); record(2);
     macro_usb_stop();
     finish_save();
-    assert(reconnects == 1 && !rebind_pending && !start_pending);
+    assert(reconnects == 1 && rebind_pending && !start_pending);
     usb_reconfiguring = false; mounted = true;
-    submit(); macro_task(); assert(!engine.status().running);
+    submit(); macro_task();
+    assert(!engine.status().running && !rebind_pending && !start_pending);
 
     controller(3); record(3); finish_save();
     assert(rebind_pending);
@@ -178,6 +284,8 @@ void test_usb_stop_during_save_or_rebind_cancels_start() {
 }
 void test_full_prefix_waits_for_explicit_save() {
     boot(true); controller(); press(3000);
+    assert(mode == Mode::RecordReady && !recorder.recording());
+    press(100);
     for (std::size_t i = 1; i <= kMaxSteps; ++i) {
         auto report = input();
         reinterpret_cast<std::uint8_t*>(&report)[0] = static_cast<std::uint8_t>(i);
@@ -190,28 +298,31 @@ void test_full_prefix_waits_for_explicit_save() {
     assert(save_phase == SavePhase::None);
     press(100); finish_save();
     assert(program_ready && active_slot == 0);
+    assert(mode == Mode::Idle && !start_pending && !engine.status().running);
 }
-void test_short_press_toggles_pending_playback_without_aborting_save() {
+void test_short_press_during_save_is_ignored_and_never_autoplays() {
     boot(true); save_initial(); controller(2); record(2);
-    assert(start_pending && save_phase != SavePhase::None);
+    assert(!start_pending && save_phase != SavePhase::None);
     const auto phase = save_phase;
     press(100);
     assert(!start_pending && mode == Mode::Save && save_phase == phase);
+    press(6'000);
+    assert(mode == Mode::Save && save_phase == phase && pair_calls == 1);
     finish_save();
     assert(active_slot == 1 && program_ready && reconnects == 1);
-    assert(!rebind_pending && !start_pending);
+    assert(rebind_pending && !start_pending);
     usb_reconfiguring = false; mounted = true;
     submit(); macro_task();
-    assert(!engine.status().running);
+    assert(!engine.status().running && !rebind_pending && !start_pending);
 
     controller(2); record(3);
     press(100);
     assert(!start_pending);
     press(100);
-    assert(start_pending && mode == Mode::Save);
+    assert(!start_pending && mode == Mode::Save);
     finish_save();
     submit(); macro_task();
-    assert(engine.status().running);
+    assert(!engine.status().running && !start_pending);
 }
 }
 
@@ -233,7 +344,7 @@ std::uint64_t get_absolute_time() { return clock_us; }
 std::uint32_t to_ms_since_boot(std::uint64_t time) { return static_cast<std::uint32_t>(time / 1000); }
 bool tud_mounted() { return mounted; }
 bool tud_suspended() { return suspended; }
-void cyw43_arch_gpio_put(unsigned, bool) {}
+void cyw43_arch_gpio_put(unsigned, bool value) { led_output = value; }
 std::uint32_t save_and_disable_interrupts() { return 0; }
 void restore_interrupts(std::uint32_t) {}
 void flash_range_erase(std::uint32_t offset, std::size_t length) { std::memset(test_flash + offset, 0xff, length); }
@@ -247,12 +358,17 @@ int flash_safe_execute(void (*callback)(void*), void* data, std::uint32_t) {
     callback(data); return 0;
 }
 int main() {
+    test_ready_is_not_capture_and_clicks_save_then_toggle_playback();
+    test_rearm_cancels_unsaved_capture_and_armed_bt_loss_is_safe();
+    test_runtime_pairing_boundary_is_5999_record_and_6000_pair();
+    test_short_press_without_saved_macro_does_not_start_pairing();
+    test_record_ready_led_differs_from_recording_led();
     test_saved_boot_and_usb_backpressure();
     test_replacement_identity_stays_pinned_until_commit();
     test_every_flash_operation_failure_retains_previous();
     test_cancel_restore_remap_and_stale_features();
     test_usb_stop_during_save_or_rebind_cancels_start();
     test_full_prefix_waits_for_explicit_save();
-    test_short_press_toggles_pending_playback_without_aborting_save();
+    test_short_press_during_save_is_ignored_and_never_autoplays();
     std::puts("Macro runtime integration tests passed");
 }

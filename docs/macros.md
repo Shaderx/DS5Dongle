@@ -6,31 +6,32 @@ The fork's `master` branch tracks the original upstream. Use the macro build on 
 
 ## Controls
 
-Use the Pico's BOOTSEL button while the firmware is running. Hold gestures take effect when you release the button. A 10-second hold selects pairing without first starting a recording at 3 seconds.
+Use the Macro Pico's BOOTSEL button while the firmware is running. Hold gestures take effect when you release the button. A 3-second hold arms recording; it does not capture input until the next short press. A 6-second hold selects pairing.
 
 | Gesture | Action |
 | --- | --- |
-| Hold for at least 10 seconds, then release | Pair or switch the physical controller. Put the DualSense in pairing mode with PS + Create. |
-| Hold for at least 3 seconds but less than 10, then release | Start a new recording from the connected controller. |
-| Short press while recording | Finish the recording, save it, and start continuous playback. |
-| Short press while saving | Toggle whether playback starts after the save. The save itself continues. |
-| Short press while playing | Stop playback and release the macro controls. |
-| Short press while stopped with a saved macro | Start the macro from its beginning. |
-| Short press after the buffer-full indication | Save the complete recorded prefix and start playback. |
+| Short press while stopped with a saved macro | Start continuous playback from the beginning. |
+| Short press while playing or waiting to start | Stop playback and release the macro controls. |
+| Hold for at least 3 seconds but less than 6, then release | Enter record-ready mode. The LED blinks slowly. |
+| Short press in record-ready mode | Start recording from the connected controller's current state. |
+| Short press while recording | Stop recording and save it. The Macro Pico stays stopped after the save. |
+| Short press after the buffer-full indication | Save the complete recorded prefix. Playback stays stopped. |
+| Hold for at least 6 seconds, then release | Pair or switch the physical controller. Put the DualSense in pairing mode with PS + Create. |
 
-The button is sampled every 100 ms and debounced. Keep the hold until its LED indication appears before releasing it. Long holds are ignored while saving. The original double-click reboot, triple-click reboot, and short hold that clears pairings are replaced by these macro controls. Holding BOOTSEL while connecting USB still enters the Pico bootloader.
+The button is sampled every 100 ms and debounced. Keep the hold until its LED indication appears before releasing it. Short presses and 3-to-6-second recording requests during a save are ignored. A 6-second pairing request can run while the atomic save finishes. A regular short press with no saved macro shows the error pattern; it does not start pairing. Holding BOOTSEL while connecting USB still enters the Pico bootloader.
 
 ## Record and replay
 
-1. Connect the macro Pico to the computer and pair a DualSense.
-2. Hold BOOTSEL for about 3 seconds. Release it when the LED shows the record-hold indication.
-3. Perform the controller actions. Recording captures buttons, the D-pad, both sticks, and both triggers. It does not record motion sensors or touch coordinates.
-4. Short-press BOOTSEL. The LED blinks quickly during saving, then stays on during playback.
-5. Short-press again to stop. A further short press restarts the saved sequence.
+1. Connect the Macro Pico to the computer and pair a DualSense.
+2. Hold BOOTSEL for at least 3 seconds but less than 6. Release it when the LED shows the slow record-ready blink.
+3. Short-press BOOTSEL to start capture. The current controller state at this press is the first recorded state.
+4. Perform the controller actions. Recording captures buttons, the D-pad, both sticks, and both triggers. It does not record motion sensors or touch coordinates.
+5. Short-press BOOTSEL to stop recording and save. The LED blinks quickly during saving, then returns to the stopped indication. Playback does not start after a save.
+6. Short-press BOOTSEL to play the saved sequence. Short-press again to stop. A further short press restarts it.
 
-Playback loops until stopped. It continues if the physical controller disconnects. Losing the controller during recording cancels that recording and preserves the previous save. After power-up, the Pico loads the saved macro but waits for a short press before playing it. USB disconnect or suspend stops playback; reconnection does not start it automatically.
+Playback loops until stopped. It continues if the physical controller disconnects. Losing the controller during recording cancels that recording and preserves the previous save. Losing the controller while record-ready leaves the Pico armed; the next short press checks for a connected controller and valid feature reports before capture starts. After power-up, the Pico loads the saved macro but waits for a short press before playing it. USB disconnect or suspend stops playback; reconnection does not start it automatically.
 
-If a replacement recording changes the saved controller identity, the Pico deliberately reconnects its USB interface after the save succeeds. Playback requested by the finish button starts after that reconnect. The previous identity stays stable while the replacement is recorded and saved.
+If a replacement recording changes the saved controller identity, the Pico deliberately reconnects its USB interface after the save succeeds. It stays stopped after that reconnect. The previous identity stays stable while the replacement is recorded and saved.
 
 During normal stopped operation, connected-controller input passes through. Recorded controls use the remapping that was active while recording. Playback does not apply that remapping a second time.
 
@@ -40,13 +41,14 @@ During normal stopped operation, connected-controller input passes through. Reco
 | --- | --- |
 | Brief pulse every 2 seconds | Stopped and ready |
 | Two short flashes each second | Bluetooth inquiry/pairing |
+| Slow 500 ms on/off blink | Record-ready mode |
 | Regular 150 ms on/off blink | Recording |
-| Steady light | Playing, or waiting to start after a neutral report |
+| Steady light | Playing, or waiting for a normal playback start to clear neutral output |
 | Fast 50 ms on/off blink | Saving |
 | On for about 700 ms each second | Recording limit reached; the complete prefix is available to save with a short press |
 | Three short flashes each second | Recording or save could not complete |
-| While held: 100 ms on/off after 3 seconds | Releasing now starts recording |
-| While held: 50 ms on/off after 10 seconds | Releasing now selects pairing |
+| While held: slow 500 ms on/off after 3 seconds | Releasing now enters record-ready mode |
+| While held: fast 50 ms on/off after 6 seconds | Releasing now selects pairing |
 
 Macro mode owns the onboard LED. The normal connection and low-battery LED policies do not override these patterns.
 

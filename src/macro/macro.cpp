@@ -33,7 +33,7 @@ BootselGesture gesture;
 Snapshot snapshot;
 Snapshot live_snapshot; // Bounded controller cache. init_feature never clears the saved snapshot.
 GamepadState live_controls;
-enum class Mode { Idle, Record, Full, Save, Error };
+enum class Mode { Idle, RecordReady, Record, Full, Save, Error };
 Mode mode = Mode::Idle;
 int active_slot = -1;
 uint32_t generation = 0;
@@ -120,6 +120,7 @@ void save_failed() {
     mode = Mode::Error;
 }
 void begin_save() {
+    start_pending = false;
     if (!snapshot_valid(snapshot) || !steps_valid(program.steps.data(), program.step_count)) {
         save_failed();
         return;
@@ -138,7 +139,6 @@ void begin_save() {
     save_position = 0;
     save_phase = SavePhase::Erase;
     mode = Mode::Save;
-    start_pending = true;
 }
 void save_tick() {
     // One sector or page per main-loop pass. USB, BT and watchdog run between operations.
@@ -188,10 +188,9 @@ void save_tick() {
         save_phase = SavePhase::None;
         mode = program_ready ? Mode::Idle : Mode::Error;
         if (program_ready && rebind) {
-            // Descriptor and feature changes need a new USB enumeration. Keep
-            // the finish-recording playback request until this mount completes.
-            rebind_pending = start_pending;
-            start_pending = false;
+            // Descriptor and feature changes need a new USB enumeration.
+            // Recording always finishes stopped, including after this rebind.
+            rebind_pending = true;
             usb_reconnect(false, true);
         }
         return;
@@ -199,9 +198,9 @@ void save_tick() {
     }
 }
 void start_recording() {
+    start_pending = false;
     if (!bt_is_connected() || !snapshot_valid(live_snapshot)) { mode = Mode::Error; return; }
     engine.stop();
-    start_pending = false;
     program_ready = false;
     snapshot = live_snapshot;
     const auto& cfg = get_config();
@@ -209,27 +208,51 @@ void start_recording() {
     recorder.cancel();
     mode = recorder.begin(program, live_controls, time_us_64()) ? Mode::Record : Mode::Error;
 }
+void enter_record_ready() {
+    if (mode == Mode::Save) return;
+    if (mode == Mode::Record || mode == Mode::Full) {
+        recorder.cancel();
+        restore_saved();
+    }
+    engine.stop();
+    start_pending = false;
+    mode = Mode::RecordReady;
+}
+void pair_controller() {
+    if (mode != Mode::Save && (mode == Mode::Record || mode == Mode::Full)) {
+        recorder.cancel();
+        restore_saved();
+    }
+    engine.stop();
+    start_pending = false;
+    if (mode != Mode::Save) mode = Mode::Idle;
+    pair_pending = bt_is_connected();
+    bt_bootsel_click_action();
+}
 void short_press() {
     if (mode == Mode::Record) {
         if (recorder.finish(time_us_64())) begin_save();
         else if (recorder.full()) mode = Mode::Full;
         else { restore_saved(); mode = Mode::Error; }
     } else if (mode == Mode::Full) {
-        begin_save(); // Explicitly commit the complete prefix after a full-buffer indication.
+        begin_save(); // Explicitly commit the full prefix; playback stays stopped.
+    } else if (mode == Mode::RecordReady) {
+        start_recording();
+    } else if (mode == Mode::Save) {
+        // A save commits the completed recording and never starts playback.
     } else if (engine.status().running || start_pending) {
         engine.stop();
         start_pending = false;
     } else {
         if (!program_ready) restore_saved();
         if (program_ready && macro_keep_usb()) { mode = Mode::Idle; start_pending = true; }
-        else if (!bt_is_connected()) bt_bootsel_click_action();
         else mode = Mode::Error;
     }
 }
 void led_tick(uint32_t now) {
     bool on;
-    if (held_ms >= 10000) on = now % 100 < 50;
-    else if (held_ms >= 3000) on = now % 200 < 100;
+    if (held_ms >= 6000) on = now % 100 < 50;
+    else if (held_ms >= 3000 || mode == Mode::RecordReady) on = now % 1000 < 500;
     else if (mode == Mode::Error) on = now % 1000 < 100 || (now % 1000 >= 200 && now % 1000 < 300) || (now % 1000 >= 400 && now % 1000 < 500);
     else if (mode == Mode::Full) on = now % 1000 < 700;
     else if (mode == Mode::Save) on = now % 100 < 50;
@@ -262,10 +285,8 @@ void macro_init() {
 }
 void macro_task() {
     save_tick();
-    if (rebind_pending && !usb_reconfiguring && tud_mounted() && !tud_suspended()) {
+    if (rebind_pending && !usb_reconfiguring && tud_mounted() && !tud_suspended())
         rebind_pending = false;
-        start_pending = true;
-    }
     if (pair_pending && !bt_is_connected()) {
         pair_pending = false;
         bt_bootsel_click_action();
@@ -359,20 +380,18 @@ void macro_button_sample(bool valid, bool pressed, uint32_t now_ms) {
     const auto action = gesture.sample(valid, pressed, wall_ms);
     held_ms = static_cast<uint32_t>(std::min<uint64_t>(gesture.held_ms(wall_ms), UINT32_MAX));
     if (mode == Mode::Save) {
-        // Saving must finish atomically, but the requested playback can still
-        // be stopped or re-armed with a short press while the write completes.
-        if (action == GestureAction::Short) start_pending = !start_pending;
+        // Saving is atomic. Ignore short and record-ready gestures; pairing can
+        // proceed while the write finishes, without changing the save state.
+        if (action == GestureAction::Pair) pair_controller();
         return;
     }
     if (action == GestureAction::Pair) {
-        if (mode == Mode::Record || mode == Mode::Full) { recorder.cancel(); restore_saved(); }
-        engine.stop();
-        start_pending = false;
-        mode = Mode::Idle;
-        pair_pending = bt_is_connected();
-        bt_bootsel_click_action();
-    } else if (action == GestureAction::Record) start_recording();
-    else if (action == GestureAction::Short) short_press();
+        pair_controller();
+    } else if (action == GestureAction::ArmRecord) {
+        enter_record_ready();
+    } else if (action == GestureAction::Short) {
+        short_press();
+    }
 }
 
 extern "C" void tud_umount_cb() {

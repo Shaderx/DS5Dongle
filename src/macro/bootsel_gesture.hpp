@@ -7,7 +7,7 @@ namespace gamepad_macro {
 enum class GestureAction : std::uint8_t {
   None,
   Short,
-  Record,
+  ArmRecord,
   Pair,
 };
 
@@ -41,8 +41,8 @@ class BootselGesture {
     if (held_for_ms < 3'000u) {
       return GestureAction::Short;
     }
-    if (held_for_ms < 10'000u) {
-      return GestureAction::Record;
+    if (held_for_ms < 6'000u) {
+      return GestureAction::ArmRecord;
     }
     return GestureAction::Pair;
   }

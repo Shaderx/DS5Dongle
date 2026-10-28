@@ -165,7 +165,7 @@ void test_bootsel_release_actions_and_hold_time() {
   CHECK(gesture.sample(false, false, 3'099) == GestureAction::None);
   CHECK(gesture.pressed());
   CHECK(gesture.held_ms(3'100) == 3'000);
-  CHECK(gesture.sample(true, false, 3'100) == GestureAction::Record);
+  CHECK(gesture.sample(true, false, 3'100) == GestureAction::ArmRecord);
   CHECK(!gesture.pressed());
   CHECK(gesture.held_ms(3'101) == 0);
   CHECK(gesture.sample(true, false, 3'102) == GestureAction::None);
@@ -175,8 +175,20 @@ void test_bootsel_release_actions_and_hold_time() {
   CHECK(gesture.sample(true, false, 12'999) == GestureAction::Short);
 
   CHECK(gesture.sample(true, true, 20'000) == GestureAction::None);
-  CHECK(gesture.held_ms(29'999) == 9'999);
-  CHECK(gesture.sample(true, false, 30'000) == GestureAction::Pair);
+  CHECK(gesture.held_ms(25'999) == 5'999);
+  CHECK(gesture.sample(true, false, 25'999) == GestureAction::ArmRecord);
+
+  CHECK(gesture.sample(true, true, 30'000) == GestureAction::None);
+  CHECK(gesture.held_ms(35'999) == 5'999);
+  CHECK(gesture.sample(true, false, 35'999) == GestureAction::ArmRecord);
+
+  CHECK(gesture.sample(true, true, 40'000) == GestureAction::None);
+  CHECK(gesture.held_ms(45'999) == 5'999);
+  CHECK(gesture.sample(true, false, 45'999) == GestureAction::ArmRecord);
+
+  CHECK(gesture.sample(true, true, 50'000) == GestureAction::None);
+  CHECK(gesture.held_ms(56'000) == 6'000);
+  CHECK(gesture.sample(true, false, 56'000) == GestureAction::Pair);
 }
 
 void test_bootsel_ignores_backward_clock_samples() {
